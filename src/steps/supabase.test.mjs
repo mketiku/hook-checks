@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { checkSupabaseConfig, supabaseConfigStep, createStaleTypesStep } from "./supabase.mjs";
+import { checkSupabaseConfig, supabaseConfigStep, createStaleTypesStep, pgtapStep } from "./supabase.mjs";
 
 describe("checkSupabaseConfig", () => {
   it("returns empty array when all content_paths resolve", () => {
@@ -179,5 +179,35 @@ describe("createStaleTypesStep", () => {
       }),
     };
     expect(() => step.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
+  });
+});
+
+describe("pgtapStep", () => {
+  it("has label 'pgtap'", () => {
+    expect(pgtapStep.label).toBe("pgtap");
+  });
+
+  it("skips when supabase status does not include DB URL", () => {
+    const execFileSync = vi.fn().mockReturnValueOnce("Local is not running.");
+    const stdout = { write: vi.fn() };
+    pgtapStep.fn({ execFileSync, stdout });
+    expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("pgTAP skipped"));
+    expect(execFileSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs supabase test db when stack is up", () => {
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("DB URL: postgresql://...")
+      .mockReturnValueOnce(undefined);
+    const stdout = { write: vi.fn() };
+    pgtapStep.fn({ execFileSync, stdout });
+    expect(execFileSync).toHaveBeenLastCalledWith("bunx", ["supabase", "test", "db"], { stdio: "inherit" });
+  });
+
+  it("skips gracefully when supabase CLI throws", () => {
+    const execFileSync = vi.fn().mockImplementationOnce(() => { throw new Error("not found"); });
+    const stdout = { write: vi.fn() };
+    expect(() => pgtapStep.fn({ execFileSync, stdout })).not.toThrow();
+    expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("pgTAP skipped"));
   });
 });

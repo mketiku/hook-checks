@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync as defaultExecFileSync } from "node:child_process";
 import { getPushMetadata } from "../utils.mjs";
+import { SCHEMA_KEYWORDS } from "./migration.mjs";
 
 /**
  * Parse and validate all content_path entries in a supabase/config.toml.
@@ -76,9 +77,6 @@ export const supabaseConfigStep = {
   },
 };
 
-// Schema keywords that imply TypeScript types need regeneration.
-const SCHEMA_KEYWORDS =
-  /\b(CREATE|DROP)\s+(TABLE|TYPE|VIEW|MATERIALIZED\s+VIEW|FUNCTION|PROCEDURE)\b|\bALTER\s+(TYPE|VIEW|MATERIALIZED\s+VIEW)\b|ADD\s+COLUMN\b|DROP\s+COLUMN\b|ALTER\s+COLUMN\b|RENAME\s+COLUMN\b|RENAME\s+TABLE\b|RENAME\s+TO\b/i;
 
 /**
  * Creates a pre-push step that fails when a schema-affecting migration is
@@ -155,3 +153,35 @@ export function createStaleTypesStep({ typesPath = "src/types/db.ts" } = {}) {
     },
   };
 }
+
+/**
+ * Pre-push step: runs `supabase test db` (pgTAP) only when the Supabase local
+ * stack is running. Skips gracefully when the stack is down.
+ */
+export const pgtapStep = {
+  label: "pgtap",
+  fn(context) {
+    const {
+      execFileSync = defaultExecFileSync,
+      stdout = process.stdout,
+    } = context;
+
+    let running = false;
+    try {
+      const status = execFileSync("bunx", ["supabase", "status"], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      running = status.includes("DB URL");
+    } catch {
+      // supabase CLI not available or stack not initialised
+    }
+
+    if (!running) {
+      stdout.write("  ⚠ Supabase not running — pgTAP skipped. Run 'bun run db' to enable.\n");
+      return;
+    }
+
+    execFileSync("bunx", ["supabase", "test", "db"], { stdio: "inherit" });
+  },
+};

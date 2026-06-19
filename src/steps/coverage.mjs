@@ -6,13 +6,18 @@ import { getPushMetadata, tail, extractVitestFailures } from "../utils.mjs";
  * Creates a pre-push coverage step.
  *
  * @param {object} opts
- * @param {string} [opts.srcRoot="src/"] - Only run coverage when files under
- *   this prefix changed. Pass null to always run.
+ * @param {string|null} [opts.srcRoot="src/"] - Only run when files under this
+ *   prefix changed. Pass null to always run (use `codeFilter` for custom logic).
+ * @param {((f: string) => boolean)|null} [opts.codeFilter] - Overrides
+ *   `srcRoot` when provided; coverage runs only when at least one changed file
+ *   passes this predicate. Useful when coverage should trigger on multiple
+ *   roots (e.g. `src/` OR `scripts/`).
  * @param {string} [opts.coverageDiffScript="coverage:diff"] - npm script to
  *   run after vitest for patch-coverage diff output.
  */
 export function createCoverageStep({
   srcRoot = "src/",
+  codeFilter = null,
   coverageDiffScript = "coverage:diff",
 } = {}) {
   return {
@@ -27,7 +32,12 @@ export function createCoverageStep({
       } = context;
       const { pushBase, changedFiles } = getPushMetadata(context, execFileSync);
 
-      if (srcRoot && changedFiles && !changedFiles.some((f) => f.startsWith(srcRoot))) return;
+      const shouldRun = codeFilter
+        ? (f) => codeFilter(f)
+        : srcRoot
+          ? (f) => f.startsWith(srcRoot)
+          : () => true;
+      if (changedFiles && !changedFiles.some(shouldRun)) return;
 
       // Local hook runs only the changed-files subset for speed; the full
       // suite + whole-repo thresholds are the authoritative gate in CI.

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { requiresNextBuild, nextBuildStep } from "./nextjs.mjs";
+import { requiresNextBuild, nextBuildStep, createReactDoctorStep } from "./nextjs.mjs";
 
 describe("requiresNextBuild", () => {
   it("triggers on App Router special files", () => {
@@ -65,5 +65,43 @@ describe("nextBuildStep", () => {
     const stdout = { write: vi.fn() };
     nextBuildStep.fn({ changedFiles: null, execFileSync, stdout, repoRoot: "/root", env: {} });
     expect(execFileSync).toHaveBeenCalledWith("bun", ["run", "build"], expect.anything());
+  });
+});
+
+describe("createReactDoctorStep", () => {
+  it("has label 'react-doctor'", () => {
+    expect(createReactDoctorStep().label).toBe("react-doctor");
+  });
+
+  it("fetches origin/main then runs bun run doctor with default args", () => {
+    const execFileSync = vi.fn();
+    const stdout = { write: vi.fn() };
+    createReactDoctorStep().fn({ execFileSync, stdout, repoRoot: "/root", env: {} });
+    expect(execFileSync).toHaveBeenCalledTimes(2);
+    expect(execFileSync).toHaveBeenNthCalledWith(
+      1, "git", ["fetch", "--no-write-fetch-head", "--no-tags", "origin", "main"], expect.anything(),
+    );
+    expect(execFileSync).toHaveBeenNthCalledWith(
+      2, "bun", ["run", "doctor", "--diff", "origin/main", "--no-dead-code", "--no-telemetry", "--fail-on", "error"], expect.anything(),
+    );
+  });
+
+  it("skips doctor when fetch fails", () => {
+    const execFileSync = vi.fn().mockImplementationOnce(() => { throw new Error("offline"); });
+    const stdout = { write: vi.fn() };
+    expect(() => createReactDoctorStep().fn({ execFileSync, stdout, repoRoot: "/root", env: {} })).not.toThrow();
+    expect(execFileSync).toHaveBeenCalledTimes(1);
+    expect(stdout.write).toHaveBeenCalledWith(expect.stringContaining("unavailable"));
+  });
+
+  it("accepts custom doctorArgs", () => {
+    const execFileSync = vi.fn();
+    const customArgs = ["--scope", "changed", "--base", "origin/main"];
+    createReactDoctorStep({ doctorArgs: customArgs }).fn({
+      execFileSync, stdout: { write: vi.fn() }, repoRoot: "/root", env: {},
+    });
+    expect(execFileSync).toHaveBeenNthCalledWith(
+      2, "bun", ["run", "doctor", ...customArgs], expect.anything(),
+    );
   });
 });

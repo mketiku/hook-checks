@@ -1,7 +1,92 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync as defaultExecFileSync } from "node:child_process";
-import { getPushMetadata } from "../utils.mjs";
+import { getPushMetadata, getPushBase } from "../utils.mjs";
+
+// Schema keywords that imply TypeScript types need regeneration.
+// Note: CREATE OR REPLACE FUNCTION does NOT match (requires CREATE directly
+// followed by FUNCTION), so only new/dropped functions trigger this check.
+export const SCHEMA_KEYWORDS =
+  /\b(CREATE|DROP)\s+(TABLE|TYPE|VIEW|MATERIALIZED\s+VIEW|FUNCTION|PROCEDURE)\b|\bALTER\s+(TYPE|VIEW|MATERIALIZED\s+VIEW)\b|ADD\s+COLUMN\b|DROP\s+COLUMN\b|ALTER\s+COLUMN\b|RENAME\s+COLUMN\b|RENAME\s+TABLE\b|RENAME\s+TO\b/i;
+
+/**
+ * Returns true if the migration SQL contains statements that would change
+ * the Supabase-generated TypeScript types file. Pure — no fs or git calls.
+ */
+export function migrationTouchesGeneratedTypes(sql) {
+  return SCHEMA_KEYWORDS.test(sql.replace(/--[^\n]*/g, ""));
+}
+
+/**
+ * Given a map of { path → sql } for changed migrations and { path → sql } for
+ * pgTAP test files, returns the paths of test files that reference a column
+ * that was renamed. Pure — no fs or git calls.
+ */
+export function findTestsWithStaleColumnRefs(migrationSqls, testSqls) {
+  const renames = [];
+  for (const sql of Object.values(migrationSqls)) {
+    for (const m of sql.matchAll(/RENAME\s+COLUMN\s+"?(\w+)"?\s+TO\s+"?\w+"?/gi)) {
+      renames.push(m[1]);
+    }
+  }
+  if (renames.length === 0) return [];
+
+  return Object.entries(testSqls)
+    .filter(([, content]) => renames.some((col) => new RegExp(`\\b${col}\\b`).test(content)))
+    .map(([path]) => path);
+}
+
+/**
+ * Pre-push step: fails when a migration renames a column but pgTAP test files
+ * still reference the old column name.
+ *
+ * @param {{ testDir?: string }} opts
+ */
+export function createPgtapRenameGuardStep({ testDir = "supabase/tests" } = {}) {
+  return {
+    label: "pgtap-rename-guard",
+    fn(context) {
+      const {
+        repoRoot = process.cwd(),
+        fs = { readFileSync },
+        execFileSync = defaultExecFileSync,
+      } = context;
+
+      const base = getPushBase(execFileSync);
+      if (base === null) return;
+
+      const changedMigrations = execFileSync(
+        "git", ["diff", "--name-only", `${base}...HEAD`], { encoding: "utf8" },
+      ).split("\n").filter((f) => f.startsWith("supabase/migrations/"));
+      if (changedMigrations.length === 0) return;
+
+      const migrationSqls = {};
+      for (const file of changedMigrations) {
+        try { migrationSqls[file] = fs.readFileSync(join(repoRoot, file), "utf8"); } catch { /* skip */ }
+      }
+
+      const testFiles = execFileSync(
+        "find",
+        [join(repoRoot, testDir), "-name", "*.sql"],
+        { encoding: "utf8" },
+      ).split("\n").filter(Boolean);
+
+      const testSqls = {};
+      for (const tf of testFiles) {
+        try { testSqls[tf.replace(repoRoot + "/", "")] = fs.readFileSync(tf, "utf8"); } catch { /* skip */ }
+      }
+
+      const staleFiles = findTestsWithStaleColumnRefs(migrationSqls, testSqls);
+      if (staleFiles.length > 0) {
+        throw new Error(
+          `Migration renames a column but these pgTAP test files still reference the old name(s):\n` +
+          staleFiles.map((f) => `  ${f}`).join("\n") +
+          "\n\nUpdate the test files to use the new column name.",
+        );
+      }
+    },
+  };
+}
 
 const MIGRATION_RE = /^supabase\/migrations\/.*\.sql$/;
 

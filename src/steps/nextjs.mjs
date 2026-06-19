@@ -50,3 +50,42 @@ export const nextBuildStep = {
     });
   },
 };
+
+/**
+ * Creates a pre-push step that fetches `origin/main` then runs React Doctor
+ * with the given args. Skips gracefully when origin/main is unavailable.
+ *
+ * @param {{ doctorArgs?: string[] }} opts
+ */
+export function createReactDoctorStep({
+  doctorArgs = ["--diff", "origin/main", "--no-dead-code", "--no-telemetry", "--fail-on", "error"],
+} = {}) {
+  return {
+    label: "react-doctor",
+    fn(context) {
+      const {
+        repoRoot = process.cwd(),
+        execFileSync = defaultExecFileSync,
+        env = process.env,
+        stdout = process.stdout,
+      } = context;
+
+      try {
+        execFileSync(
+          "git",
+          ["fetch", "--no-write-fetch-head", "--no-tags", "origin", "main"],
+          { cwd: repoRoot, stdio: "ignore" },
+        );
+      } catch {
+        stdout.write("  ⚠ react-doctor skipped — origin/main unavailable\n");
+        return;
+      }
+
+      execFileSync("bun", ["run", "doctor", ...doctorArgs], {
+        cwd: repoRoot,
+        stdio: "inherit",
+        env,
+      });
+    },
+  };
+}

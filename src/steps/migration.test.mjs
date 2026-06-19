@@ -3,6 +3,9 @@ import {
   migrationRealTimestampsStep,
   migrationDropBeforeCreateStep,
   migrationFnOverloadStep,
+  migrationTouchesGeneratedTypes,
+  findTestsWithStaleColumnRefs,
+  createPgtapRenameGuardStep,
 } from "./migration.mjs";
 
 describe("migrationRealTimestampsStep", () => {
@@ -175,5 +178,87 @@ describe("migrationFnOverloadStep", () => {
       }),
     };
     expect(() => migrationFnOverloadStep.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
+  });
+});
+
+describe("migrationTouchesGeneratedTypes", () => {
+  it("returns true for ADD COLUMN", () => {
+    expect(migrationTouchesGeneratedTypes(
+      "alter table public.profiles add column username citext;"
+    )).toBe(true);
+  });
+
+  it("returns true for CREATE TABLE", () => {
+    expect(migrationTouchesGeneratedTypes("create table public.widgets (id uuid);")).toBe(true);
+  });
+
+  it("returns true for DROP TABLE", () => {
+    expect(migrationTouchesGeneratedTypes("drop table if exists public.widgets;")).toBe(true);
+  });
+
+  it("returns true for RENAME COLUMN", () => {
+    expect(migrationTouchesGeneratedTypes(
+      "alter table public.foo rename column old_name to new_name;"
+    )).toBe(true);
+  });
+
+  it("returns false for constraint-only migrations", () => {
+    expect(migrationTouchesGeneratedTypes(`
+      alter table public.people drop constraint if exists people_user_id_fkey;
+      alter table public.people
+        add constraint people_user_id_fkey
+        foreign key (user_id) references auth.users(id) on delete cascade;
+    `)).toBe(false);
+  });
+
+  it("returns false for CREATE OR REPLACE FUNCTION (no schema shape change)", () => {
+    expect(migrationTouchesGeneratedTypes(
+      "create or replace function public.foo() returns void language sql as $$ select 1 $$;"
+    )).toBe(false);
+  });
+
+  it("strips SQL comments before testing", () => {
+    expect(migrationTouchesGeneratedTypes(
+      "-- alter table public.foo add column bar text;\nrevoke execute on function public.foo from anon;"
+    )).toBe(false);
+  });
+});
+
+describe("findTestsWithStaleColumnRefs", () => {
+  it("returns [] when no renames in migrations", () => {
+    const sqls = { "m.sql": "alter table foo add column bar text;" };
+    expect(findTestsWithStaleColumnRefs(sqls, { "t.sql": "select bar from foo;" })).toEqual([]);
+  });
+
+  it("flags test files referencing the old column name", () => {
+    const sqls = { "m.sql": "alter table foo rename column old_col to new_col;" };
+    const tests = { "t1.sql": "select old_col from foo;", "t2.sql": "select new_col from foo;" };
+    expect(findTestsWithStaleColumnRefs(sqls, tests)).toEqual(["t1.sql"]);
+  });
+
+  it("returns [] when all test files use the new column name", () => {
+    const sqls = { "m.sql": "alter table foo rename column old_col to new_col;" };
+    const tests = { "t.sql": "select new_col from foo;" };
+    expect(findTestsWithStaleColumnRefs(sqls, tests)).toEqual([]);
+  });
+});
+
+describe("createPgtapRenameGuardStep", () => {
+  it("has label 'pgtap-rename-guard'", () => {
+    expect(createPgtapRenameGuardStep().label).toBe("pgtap-rename-guard");
+  });
+
+  it("skips when no migrations changed", () => {
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base-sha\n")  // getPushBase: rev-parse @{u}
+      .mockReturnValueOnce("src/foo.ts\n");  // git diff --name-only
+    expect(() => createPgtapRenameGuardStep().fn({ execFileSync, repoRoot: "/root" })).not.toThrow();
+  });
+
+  it("skips when no push base (both rev-parse calls fail)", () => {
+    const execFileSync = vi.fn()
+      .mockImplementationOnce(() => { throw new Error("no upstream"); })
+      .mockImplementationOnce(() => { throw new Error("no origin/main"); });
+    expect(() => createPgtapRenameGuardStep().fn({ execFileSync, repoRoot: "/root" })).not.toThrow();
   });
 });
