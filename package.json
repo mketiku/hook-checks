@@ -1,6 +1,6 @@
 {
   "name": "@mketiku/hook-checks",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "description": "Shared pre-commit/pre-push hook runner and portable step library",
   "exports": {
@@ -12,7 +12,9 @@
     "./steps/migration": "./src/steps/migration.mjs",
     "./steps/supabase": "./src/steps/supabase.mjs",
     "./steps/nextjs": "./src/steps/nextjs.mjs",
-    "./steps/coverage": "./src/steps/coverage.mjs"
+    "./steps/coverage": "./src/steps/coverage.mjs",
+    "./steps/tdd": "./src/steps/tdd.mjs",
+    "./diff-coverage": "./src/diff-coverage.mjs"
   },
   "files": [
     "src"

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync as defaultExecFileSync } from "node:child_process";
+import { getPushMetadata } from "../utils.mjs";
 
 /**
  * Parse and validate all content_path entries in a supabase/config.toml.
@@ -74,3 +75,83 @@ export const supabaseConfigStep = {
     }
   },
 };
+
+// Schema keywords that imply TypeScript types need regeneration.
+const SCHEMA_KEYWORDS =
+  /\b(CREATE|DROP)\s+(TABLE|TYPE|VIEW|MATERIALIZED\s+VIEW|FUNCTION|PROCEDURE)\b|\bALTER\s+(TYPE|VIEW|MATERIALIZED\s+VIEW)\b|ADD\s+COLUMN\b|DROP\s+COLUMN\b|ALTER\s+COLUMN\b|RENAME\s+COLUMN\b|RENAME\s+TABLE\b|RENAME\s+TO\b/i;
+
+/**
+ * Creates a pre-push step that fails when a schema-affecting migration is
+ * pushed without regenerating the TypeScript types file.
+ *
+ * @param {{ typesPath?: string }} opts
+ */
+export function createStaleTypesStep({ typesPath = "src/types/db.ts" } = {}) {
+  return {
+    label: "stale-types",
+    fn(context) {
+      const {
+        repoRoot = process.cwd(),
+        fs = { readFileSync },
+        execFileSync = defaultExecFileSync,
+      } = context;
+      const { changedFiles } = getPushMetadata(context, execFileSync);
+      if (!changedFiles) return;
+
+      const changedMigrations = changedFiles.filter((f) =>
+        f.startsWith("supabase/migrations/"),
+      );
+      if (changedMigrations.length === 0) return;
+
+      // Only fail if at least one migration contains schema-affecting SQL.
+      // Policy-only, index-only, grant/revoke, and constraint-only migrations
+      // don't change the generated TypeScript types.
+      const hasSchemaChange = changedMigrations.some((f) => {
+        try {
+          const sql = fs.readFileSync(join(repoRoot, f), "utf8").replace(/--[^\n]*/g, "");
+          return SCHEMA_KEYWORDS.test(sql);
+        } catch {
+          return false;
+        }
+      });
+      if (!hasSchemaChange) return;
+
+      const hasTypesChange = changedFiles.some((f) => f === typesPath);
+      if (hasTypesChange) return;
+
+      // Types weren't modified in this diff. They may still be current if the
+      // migration's added identifiers already appear in the types file (e.g.
+      // types were regenerated in an earlier commit on the upstream branch).
+      const addedIdentifiers = new Set();
+      for (const file of changedMigrations) {
+        try {
+          const sql = fs.readFileSync(join(repoRoot, file), "utf8").replace(/--[^\n]*/g, "");
+          for (const m of sql.matchAll(/ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+"?([a-z_][a-z0-9_]*)"?/gi))
+            addedIdentifiers.add(m[1]);
+          for (const m of sql.matchAll(/CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+(?:\w+\.)?"?([a-z_][a-z0-9_]*)"?/gi))
+            addedIdentifiers.add(m[1]);
+          for (const m of sql.matchAll(/CREATE\s+TYPE\s+(?:\w+\.)?"?([a-z_][a-z0-9_]*)"?/gi))
+            addedIdentifiers.add(m[1]);
+          for (const m of sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:\w+\.)?"?([a-z_][a-z0-9_]*)"?/gi))
+            addedIdentifiers.add(m[1]);
+        } catch {
+          // ignore unreadable migration files
+        }
+      }
+
+      if (addedIdentifiers.size > 0) {
+        try {
+          const typesContent = fs.readFileSync(join(repoRoot, typesPath), "utf8");
+          if ([...addedIdentifiers].every((ident) => typesContent.includes(ident))) return;
+        } catch {
+          // fall through to throw
+        }
+      }
+
+      throw new Error(
+        `Schema-affecting migration added but ${typesPath} was not updated.\n` +
+          `Run: bun run generate:types && git add ${typesPath} && git commit --amend --no-edit`,
+      );
+    },
+  };
+}

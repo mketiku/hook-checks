@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { checkSupabaseConfig, supabaseConfigStep } from "./supabase.mjs";
+import { checkSupabaseConfig, supabaseConfigStep, createStaleTypesStep } from "./supabase.mjs";
 
 describe("checkSupabaseConfig", () => {
   it("returns empty array when all content_paths resolve", () => {
@@ -78,5 +78,106 @@ describe("supabaseConfigStep", () => {
       readFileSync: vi.fn().mockReturnValue('[section]\ncontent_path = "present.txt"'),
     };
     expect(() => supabaseConfigStep.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
+  });
+});
+
+describe("createStaleTypesStep", () => {
+  it("returns a step with label 'stale-types'", () => {
+    expect(createStaleTypesStep().label).toBe("stale-types");
+  });
+
+  it("skips when changedFiles is null (cannot determine base)", () => {
+    const step = createStaleTypesStep();
+    const execFileSync = vi.fn().mockImplementation(() => { throw new Error("git error"); });
+    step.fn({ execFileSync });
+    expect(execFileSync).toHaveBeenCalledTimes(2); // rev-parse @{u} + rev-parse origin/main both fail
+  });
+
+  it("skips when no migrations changed", () => {
+    const step = createStaleTypesStep();
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base-sha")
+      .mockReturnValueOnce("other-file.txt");
+    step.fn({ execFileSync });
+    expect(execFileSync).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips when migration has no schema-affecting SQL", () => {
+    const step = createStaleTypesStep();
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base")
+      .mockReturnValueOnce("supabase/migrations/1.sql");
+    const fs = {
+      readFileSync: vi.fn().mockReturnValue("CREATE POLICY foo ON bar;"),
+    };
+    expect(() => step.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
+  });
+
+  it("throws when schema change present but types file not updated", () => {
+    const step = createStaleTypesStep();
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base")
+      .mockReturnValueOnce("supabase/migrations/1.sql");
+    const fs = {
+      readFileSync: vi.fn().mockImplementation((p) => {
+        if (String(p).endsWith("1.sql")) return "ALTER TABLE foo ADD COLUMN bar text";
+        if (String(p).endsWith("db.ts")) return "// no matching identifier";
+        return "";
+      }),
+    };
+    expect(() => step.fn({ execFileSync, fs, repoRoot: "/root" })).toThrow("was not updated");
+  });
+
+  it("passes when migration column already appears in types file", () => {
+    const step = createStaleTypesStep();
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base")
+      .mockReturnValueOnce("supabase/migrations/1.sql");
+    const fs = {
+      readFileSync: vi.fn().mockImplementation((p) => {
+        if (String(p).endsWith("1.sql")) return "ALTER TABLE foo ADD COLUMN ai_score float";
+        if (String(p).endsWith("db.ts")) return "ai_score: number | null";
+        return "";
+      }),
+    };
+    expect(() => step.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
+  });
+
+  it("passes when the types file itself is in the changed set", () => {
+    const step = createStaleTypesStep();
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base")
+      .mockReturnValueOnce("supabase/migrations/1.sql\nsrc/types/db.ts");
+    const fs = {
+      readFileSync: vi.fn().mockReturnValue("ALTER TABLE foo ADD COLUMN bar text"),
+    };
+    expect(() => step.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
+  });
+
+  it("respects a custom typesPath", () => {
+    const step = createStaleTypesStep({ typesPath: "lib/db.ts" });
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base")
+      .mockReturnValueOnce("supabase/migrations/1.sql\nlib/db.ts");
+    const fs = {
+      readFileSync: vi.fn().mockReturnValue("ALTER TABLE foo ADD COLUMN bar text"),
+    };
+    expect(() => step.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
+  });
+
+  it("ignores schema keywords in SQL comments", () => {
+    const step = createStaleTypesStep();
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base")
+      .mockReturnValueOnce("supabase/migrations/1.sql");
+    const fs = {
+      readFileSync: vi.fn().mockImplementation((p) => {
+        if (String(p).endsWith("1.sql"))
+          return "-- A bare CREATE TABLE in a comment\nCREATE TABLE IF NOT EXISTS real_table (id text PRIMARY KEY);";
+        if (String(p).endsWith("db.ts")) return "real_table: { id: string }";
+        return "";
+      }),
+    };
+    expect(() => step.fn({ execFileSync, fs, repoRoot: "/root" })).not.toThrow();
   });
 });
