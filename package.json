@@ -7,6 +7,7 @@
     "./runner": "./src/runner.mjs",
     "./utils": "./src/utils.mjs",
     "./steps/actionlint": "./src/steps/actionlint.mjs",
+    "./steps/lint": "./src/steps/lint.mjs",
     "./steps/typecheck": "./src/steps/typecheck.mjs"
   },
   "files": [

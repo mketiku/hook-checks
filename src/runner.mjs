@@ -158,6 +158,7 @@ export async function runMain(stepsByMode, context = {}) {
   const logFile = join(logDir, `${mode}.log`);
 
   try {
+    const hookStart = Date.now();
     for (const entry of stepsByMode[mode]) {
       if (Array.isArray(entry)) {
         if (!compactMode) {
@@ -177,7 +178,8 @@ export async function runMain(stepsByMode, context = {}) {
         if (!ok) exit(1);
       }
     }
-    stdout.write(`✅ ${mode} checks passed\n`);
+    const totalElapsed = ((Date.now() - hookStart) / 1000).toFixed(1);
+    stdout.write(`✅ ${mode} checks passed  ⏱ total: ${totalElapsed}s\n`);
   } finally {
     fs.rmSync(logDir, { recursive: true, force: true });
   }
