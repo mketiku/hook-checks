@@ -1,6 +1,6 @@
 {
   "name": "@mketiku/hook-checks",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Shared pre-commit/pre-push hook runner and portable step library",
   "exports": {
@@ -8,7 +8,8 @@
     "./utils": "./src/utils.mjs",
     "./steps/actionlint": "./src/steps/actionlint.mjs",
     "./steps/lint": "./src/steps/lint.mjs",
-    "./steps/typecheck": "./src/steps/typecheck.mjs"
+    "./steps/typecheck": "./src/steps/typecheck.mjs",
+    "./steps/migration": "./src/steps/migration.mjs"
   },
   "files": [
     "src"
