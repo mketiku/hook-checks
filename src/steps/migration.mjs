@@ -114,10 +114,11 @@ export const migrationRealTimestampsStep = {
     });
 
     if (offenders.length > 0) {
+      const suffix = offenders[0].match(/supabase\/migrations\/\d{14}_(.+)$/)[1];
       throw new Error(
         "Migration filename(s) use a hand-typed timestamp (ends in 0000).\n" +
           "Use a real timestamp to guarantee uniqueness:\n\n" +
-          "  mv " + offenders[0] + " supabase/migrations/$(date +%Y%m%d%H%M%S)_<name>.sql\n\n" +
+          "  mv " + offenders[0] + " supabase/migrations/$(date +%Y%m%d%H%M%S)_" + suffix + "\n\n" +
           "Offending files:\n" +
           offenders.map((f) => `  ${f}`).join("\n"),
       );

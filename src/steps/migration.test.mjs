@@ -29,6 +29,21 @@ describe("migrationRealTimestampsStep", () => {
     );
   });
 
+  it("suggests a copy-pasteable mv command with no <name> placeholder", () => {
+    const execFileSync = vi.fn()
+      .mockReturnValueOnce("base")
+      .mockReturnValueOnce("supabase/migrations/20260617120000_search.sql");
+    try {
+      migrationRealTimestampsStep.fn({ execFileSync, repoRoot: "/root" });
+      throw new Error("expected fn to throw");
+    } catch (err) {
+      expect(err.message).not.toContain("<name>");
+      expect(err.message).toContain(
+        "mv supabase/migrations/20260617120000_search.sql supabase/migrations/$(date +%Y%m%d%H%M%S)_search.sql",
+      );
+    }
+  });
+
   it("skips when no migrations changed", () => {
     const execFileSync = vi.fn()
       .mockReturnValueOnce("base")
